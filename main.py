@@ -28,33 +28,42 @@ def create_hr_diagram():
     ax.set_yscale('log')
     ax.set_ylim(L_MIN, L_MAX)
     ax.set_ylabel("Luminosity")
-    return ax
+    return fig, ax
 
 '''
-    Calculations are made from 
-    https://405nm.com/wavelength-to-color/
-
-    Converts temperature to rgb color using simple ranges
+    Converts temperature color to rgb color
+    Honestly I do not know the math behind this
 '''
-def get_color(t):
-    colors = [
-        ("#783CFF"),  # 380 nm (violet)
-        ("#3C78FF"),  # 430 nm (blue)
-        ("#00AAFF"),  #  470 nm (cyan)
-        ("#00DCAA"),  #  500 nm (blue green)
-        ("#3CFF3C"),  #  540 nm (green)
-        ("#FFFF00"),  #  580 nm (yellow)
-        ("#FF8C00"),  #  620 nm (orange)
-        ("#FF3C3C"),  #  700 nm (red)
-    ]
+def get_color(T):
+    T = max(1000.0, min(40000.0, float(T)))
+    t = T / 100.0
 
-    n = len(colors)
+    # --- Red ---
+    if t <= 66.0:
+        r = 255.0
+    else:
+        r = 329.698727446 * ((t - 60.0) ** -0.1332047592)
 
-    T = min(t, T_MAX)
-    T = max(t, T_MIN)
+    # --- Green ---
+    if t <= 66.0:
+        g = 99.4708025861 * np.log(t) - 161.1195681661
+    else:
+        g = 288.1221695283 * ((t - 60.0) ** -0.0755148492)
 
-    idx = int((1.0 - (T - T_MIN) / (T_MAX - T_MIN)) * (n - 1) + 1e-9)
-    return colors[idx]
+    # --- Blue ---
+    if t >= 66.0:
+        b = 255.0
+    elif t <= 19.0:
+        b = 0.0
+    else:
+        b = 138.5177312231 * np.log(t - 10.0) - 305.0447927307
+
+    # clamp to 0..255 and convert to int
+    r = int(max(0.0, min(255.0, r)))
+    g = int(max(0.0, min(255.0, g)))
+    b = int(max(0.0, min(255.0, b)))
+
+    return f"#{r:02X}{g:02X}{b:02X}"
 
 '''
     Returns the radius of the star given the temperature and the luminance
@@ -77,11 +86,18 @@ def get_plt_size(T, L):
     frac = (np.log10(R) - np.log10(R_min)) / (np.log10(R_max) - np.log10(R_min))
     frac = np.clip(frac, 0, 1)
 
-    gamma = 2
-    frac = frac**gamma
+    R_anchor = get_radius(T_MAX, L_MAX)
+    frac_anchor = (np.log10(R_anchor) - np.log10(R_min)) / (np.log10(R_max) - np.log10(R_min))
+    frac_anchor = np.clip(frac_anchor, 1e-6, 1 - 1e-6)
 
+    target = 0.5  # halfway between a_min and a_max
+
+    # solve gamma so frac_anchor maps to target
+    gamma = np.log(target) / np.log(frac_anchor)
+
+    # apply curve
+    frac = frac ** gamma
     return a_min + frac * (a_max - a_min)
-
 
 
 def main():
@@ -89,12 +105,72 @@ def main():
     c = 'red'
     get_radius(30000, 1e-4)
     get_radius(2500, 1e6)
-    ax = create_hr_diagram()
-    ax.scatter([3000], [1e5], get_plt_size(3000, 1e5), get_color(3000))
+    fig, ax = create_hr_diagram()
+    ax.scatter([4000], [1e4], get_plt_size(4000, 1e4), get_color(4000))
     ax.scatter([5000], [10], get_plt_size(5000, 10), get_color(5000))
     ax.scatter([10000], [10], get_plt_size(10000, 10), get_color(10000))
     ax.scatter([15000], [10], get_plt_size(15000, 10), get_color(15000))
-    ax.scatter([25000], [1e-3], get_plt_size(25000, 1e-3), get_color(25000))
+    pt = ax.scatter([25000], [1e-3], get_plt_size(25000, 1e-3), get_color(25000))
+
+    dragging = False
+    button = None
+
+    def on_press(event):
+        nonlocal dragging, button
+        if(not event.inaxes):
+            return
+        else:
+            contains, _ = pt.contains(event)
+            if contains:
+                dragging = True
+                button = event.button
+
+    def on_release(event):
+        nonlocal dragging, button
+    # Only end drag if we are dragging and this is the same button
+        if not dragging:
+            return
+        if event.button != button:
+            return
+        
+        dragging = False
+        button = None
+
+    def on_motion(event):
+        nonlocal dragging, button
+        if not dragging:
+            return
+        if event.inaxes != ax:
+            return
+        if event.xdata is None or event.ydata is None:
+            return
+        
+        x = event.xdata
+        y = event.ydata
+
+        pt.set_offsets([[x, y]])
+        pt.set_color(get_color(x))
+        pt.set_sizes([get_plt_size(x, y)])
+        fig.canvas.draw_idle()
+
+    fig.canvas.mpl_connect("button_press_event", on_press)
+    fig.canvas.mpl_connect("button_release_event", on_release)
+    fig.canvas.mpl_connect("motion_notify_event", on_motion)
+
+    plt.subplots_adjust(right=0.70)
+
+    tax = fig.add_axes([0.75, 0.15, 0.22, 0.7])
+    tax.axis("off")
+
+    cell_text = [
+        ["T (K)", "5800"],
+        ["L", "1.0"],
+        ["R", "1.0"],
+        ["λ_peak", "500 nm"],
+    ]
+
+    table = tax.table(cellText=cell_text, loc="center")
+    table.scale(1, 1.4)
     plt.show()
 
 if __name__ == "__main__":
